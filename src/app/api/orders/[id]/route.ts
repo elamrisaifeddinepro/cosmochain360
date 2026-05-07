@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import dbConnect from '@/lib/db'
 import Order from '@/models/Order'
+import { requireAuth, requireManagerOrAdmin } from '@/lib/auth-guards'
+
+export const dynamic = 'force-dynamic'
 
 const ALLOWED_STATUSES = [
   'pending',
@@ -15,24 +16,72 @@ const ALLOWED_STATUSES = [
   'refunded',
 ]
 
+export async function GET(
+  req: NextRequest,
+  { params }: { params: { id: string } }
+) {
+  const auth = await requireAuth()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
+  try {
+    await dbConnect()
+
+    if (!mongoose.Types.ObjectId.isValid(params.id)) {
+      return NextResponse.json(
+        { error: 'ID commande invalide' },
+        { status: 400 }
+      )
+    }
+
+    const user = auth.session.user as any
+
+    const order = await Order.findById(params.id).lean()
+
+    if (!order) {
+      return NextResponse.json(
+        { error: 'Commande introuvable' },
+        { status: 404 }
+      )
+    }
+
+    const orderUserId = String((order as any).userId || '')
+    const currentUserId = String(user.id || '')
+    const isAdminOrManager = user.role === 'admin' || user.role === 'manager'
+    const isOwner = orderUserId === currentUserId
+
+    if (!isAdminOrManager && !isOwner) {
+      return NextResponse.json(
+        { error: 'Accès refusé' },
+        { status: 403 }
+      )
+    }
+
+    return NextResponse.json(order)
+  } catch (error) {
+    console.error('GET /api/orders/[id] error:', error)
+
+    return NextResponse.json(
+      { error: 'Erreur serveur lors du chargement de la commande' },
+      { status: 500 }
+    )
+  }
+}
+
 export async function PUT(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
-
-    const session = await getServerSession(authOptions)
-
-    if (!session) {
-      return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
-    }
-
-    const user = session.user as any
-
-    if (!['admin', 'manager'].includes(user.role)) {
-      return NextResponse.json({ error: 'Accès refusé' }, { status: 403 })
-    }
 
     if (!mongoose.Types.ObjectId.isValid(params.id)) {
       return NextResponse.json(

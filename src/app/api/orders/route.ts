@@ -1,22 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import dbConnect from '@/lib/db'
 import Order from '@/models/Order'
 import Inventory from '@/models/Inventory'
 import { generateOrderNumber, calculateTaxes } from '@/lib/utils'
+import { requireAuth } from '@/lib/auth-guards'
+
+export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireAuth()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
-    const session = await getServerSession(authOptions)
-
-    if (!session) {
-      return NextResponse.json({ error: 'Non autorisé' }, { status: 401 })
-    }
-
-    const user = session.user as any
+    const user = auth.session.user as any
 
     const { searchParams } = new URL(req.url)
     const page = Number(searchParams.get('page') || 1)
@@ -28,7 +29,9 @@ export async function GET(req: NextRequest) {
         ? {}
         : { userId: user.id }
 
-    if (status) query.status = status
+    if (status) {
+      query.status = status
+    }
 
     const [orders, total] = await Promise.all([
       Order.find(query)
@@ -59,10 +62,16 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireAuth()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
-    const session = await getServerSession(authOptions)
+    const user = auth.session.user as any
     const body = await req.json()
 
     const { items, shippingAddress, province = 'QC' } = body
@@ -74,8 +83,16 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    if (!shippingAddress) {
+      return NextResponse.json(
+        { error: 'Adresse de livraison obligatoire' },
+        { status: 400 }
+      )
+    }
+
     const subtotal = items.reduce(
-      (sum: number, item: any) => sum + Number(item.price) * Number(item.quantity),
+      (sum: number, item: any) =>
+        sum + Number(item.price) * Number(item.quantity),
       0
     )
 
@@ -85,8 +102,7 @@ export async function POST(req: NextRequest) {
 
     const order = await Order.create({
       orderNumber: generateOrderNumber(),
-      userId: session ? (session.user as any).id : undefined,
-      guestEmail: !session ? body.email : undefined,
+      userId: user.id,
       items,
       shippingAddress,
       subtotal,
@@ -103,7 +119,7 @@ export async function POST(req: NextRequest) {
     for (const item of items) {
       await Inventory.findOneAndUpdate(
         { productId: item.productId },
-        { $inc: { reserved: item.quantity } }
+        { $inc: { reserved: Number(item.quantity) } }
       )
     }
 
