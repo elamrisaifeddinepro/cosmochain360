@@ -5,22 +5,36 @@ import Order from '@/models/Order'
 import Product from '@/models/Product'
 import { calculateROP, calculateSafetyStock } from '@/lib/utils'
 import { getISOWeek, getYear, addWeeks } from 'date-fns'
+import { requireManagerOrAdmin } from '@/lib/auth-guards'
+
+export const dynamic = 'force-dynamic'
 
 function movingAverage(data: number[], window = 12): number {
   if (data.length === 0) return 0
+
   const slice = data.slice(-window)
+
   return slice.reduce((a, b) => a + b, 0) / slice.length
 }
 
 function stdDev(data: number[]): number {
   if (data.length < 2) return 0
+
   const mean = data.reduce((a, b) => a + b, 0) / data.length
+
   const variance =
     data.reduce((sum, val) => sum + (val - mean) ** 2, 0) / (data.length - 1)
+
   return Math.sqrt(variance)
 }
 
 export async function GET(req: NextRequest) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
@@ -30,12 +44,18 @@ export async function GET(req: NextRequest) {
     const weeks = Number(searchParams.get('weeks') || 12)
 
     const query: any = { site }
-    if (productId) query.productId = productId
+
+    if (productId) {
+      query.productId = productId
+    }
 
     const forecasts = await Forecast.find(query)
       .sort({ week: -1 })
       .limit(weeks)
-      .populate('productId', 'nameFr nameEn sku reorderPoint safetyStock leadTimeDays')
+      .populate(
+        'productId',
+        'nameFr nameEn sku reorderPoint safetyStock leadTimeDays'
+      )
       .lean()
 
     return NextResponse.json(forecasts.reverse())
@@ -50,6 +70,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
@@ -89,7 +115,8 @@ export async function POST(req: NextRequest) {
 
       order.items.forEach((item: any) => {
         if (item.productId.toString() === productId) {
-          weeklyDemand[weekKey] = (weeklyDemand[weekKey] || 0) + item.quantity
+          weeklyDemand[weekKey] =
+            (weeklyDemand[weekKey] || 0) + Number(item.quantity || 0)
         }
       })
     }
@@ -104,13 +131,19 @@ export async function POST(req: NextRequest) {
     const stdDevDemand = stdDev(demandValues)
     const leadTimeDays = Number((product as any).leadTimeDays || 14)
 
-    const safetyStock = calculateSafetyStock(1.65, stdDevDemand, leadTimeDays / 7)
+    const safetyStock = calculateSafetyStock(
+      1.65,
+      stdDevDemand,
+      leadTimeDays / 7
+    )
+
     const rop = calculateROP(forecastValue / 7, leadTimeDays, safetyStock)
 
     const forecasts = []
 
     for (let i = 1; i <= Number(weeksAhead); i++) {
       const weekDate = addWeeks(new Date(), i)
+
       const weekKey = `${getYear(weekDate)}-W${String(
         getISOWeek(weekDate)
       ).padStart(2, '0')}`
