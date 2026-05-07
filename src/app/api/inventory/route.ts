@@ -1,11 +1,17 @@
 import { NextRequest, NextResponse } from 'next/server'
 import dbConnect from '@/lib/db'
 import Inventory from '@/models/Inventory'
-import Product from '@/models/Product'
+import { requireManagerOrAdmin } from '@/lib/auth-guards'
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
@@ -20,7 +26,10 @@ export async function GET(req: NextRequest) {
 
     const normalized = inventories.map((inv: any) => ({
       ...inv,
-      available: Math.max(0, Number(inv.quantity || 0) - Number(inv.reserved || 0)),
+      available: Math.max(
+        0,
+        Number(inv.quantity || 0) - Number(inv.reserved || 0)
+      ),
     }))
 
     if (lowStock) {
@@ -43,11 +52,23 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PUT(req: NextRequest) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
     const body = await req.json()
-    const { productId, site = 'MTL-01', quantity, reserved, action = 'set' } = body
+    const {
+      productId,
+      site = 'MTL-01',
+      quantity,
+      reserved,
+      action = 'set',
+    } = body
 
     if (!productId) {
       return NextResponse.json(
@@ -58,8 +79,8 @@ export async function PUT(req: NextRequest) {
 
     const current = await Inventory.findOne({ productId, site })
 
-    const currentQuantity = current?.quantity || 0
-    const currentReserved = current?.reserved || 0
+    const currentQuantity = Number(current?.quantity || 0)
+    const currentReserved = Number(current?.reserved || 0)
 
     let nextQuantity = currentQuantity
     let nextReserved = currentReserved
