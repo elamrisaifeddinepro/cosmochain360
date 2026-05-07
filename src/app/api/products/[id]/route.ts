@@ -1,29 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import mongoose from 'mongoose'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import dbConnect from '@/lib/db'
 import Product from '@/models/Product'
+import { requireManagerOrAdmin } from '@/lib/auth-guards'
 
-async function requireAdminOrManager() {
-  const session = await getServerSession(authOptions)
-
-  if (!session) {
-    return {
-      error: NextResponse.json({ error: 'Non autorisé' }, { status: 401 }),
-    }
-  }
-
-  const user = session.user as any
-
-  if (!['admin', 'manager'].includes(user.role)) {
-    return {
-      error: NextResponse.json({ error: 'Accès refusé' }, { status: 403 }),
-    }
-  }
-
-  return { session }
-}
+export const dynamic = 'force-dynamic'
 
 export async function GET(
   req: NextRequest,
@@ -62,10 +43,13 @@ export async function PUT(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  try {
-    const auth = await requireAdminOrManager()
-    if (auth.error) return auth.error
+  const auth = await requireManagerOrAdmin()
 
+  if (!auth.authorized) {
+    return auth.response
+  }
+
+  try {
     await dbConnect()
 
     if (!mongoose.Types.ObjectId.isValid(params.id)) {
@@ -108,10 +92,13 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
 ) {
-  try {
-    const auth = await requireAdminOrManager()
-    if (auth.error) return auth.error
+  const auth = await requireManagerOrAdmin()
 
+  if (!auth.authorized) {
+    return auth.response
+  }
+
+  try {
     await dbConnect()
 
     if (!mongoose.Types.ObjectId.isValid(params.id)) {
