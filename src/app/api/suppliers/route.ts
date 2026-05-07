@@ -2,8 +2,17 @@ import { NextRequest, NextResponse } from 'next/server'
 import dbConnect from '@/lib/db'
 import Supplier from '@/models/Supplier'
 import { supplierRiskScore } from '@/lib/utils'
+import { requireManagerOrAdmin } from '@/lib/auth-guards'
+
+export const dynamic = 'force-dynamic'
 
 export async function GET(req: NextRequest) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
@@ -32,6 +41,12 @@ export async function GET(req: NextRequest) {
 }
 
 export async function POST(req: NextRequest) {
+  const auth = await requireManagerOrAdmin()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
 
