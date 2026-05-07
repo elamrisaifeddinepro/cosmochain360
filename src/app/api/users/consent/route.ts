@@ -1,28 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
 import dbConnect from '@/lib/db'
 import User from '@/models/User'
+import { requireAuth } from '@/lib/auth-guards'
+
+export const dynamic = 'force-dynamic'
 
 export async function PUT(req: NextRequest) {
+  const auth = await requireAuth()
+
+  if (!auth.authorized) {
+    return auth.response
+  }
+
   try {
     await dbConnect()
-
-    const session = await getServerSession(authOptions)
-
-    if (!session) {
-      return NextResponse.json(
-        { error: 'Non autorisé' },
-        { status: 401 }
-      )
-    }
 
     const body = await req.json()
 
     const marketingConsent = Boolean(body.marketingConsent)
     const analyticsConsent = Boolean(body.analyticsConsent)
 
-    const userId = (session.user as any).id
+    const userId = (auth.session.user as any).id
 
     const user = await User.findByIdAndUpdate(
       userId,
