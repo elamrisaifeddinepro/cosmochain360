@@ -3,6 +3,7 @@ import Stripe from 'stripe'
 import dbConnect from '@/lib/db'
 import Order from '@/models/Order'
 import { requireAuth } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -94,6 +95,27 @@ export async function POST(req: NextRequest) {
 
     order.stripePaymentIntentId = paymentIntent.id
     await order.save()
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'PAYMENT_INTENT_CREATED',
+      entity: 'Order',
+      entityId: order._id.toString(),
+      metadata: {
+        orderNumber: order.orderNumber,
+        stripePaymentIntentId: paymentIntent.id,
+        amount,
+        amountCad: Number(order.total || 0),
+        currency: 'cad',
+        paymentStatus: order.paymentStatus,
+        orderStatus: order.status,
+      },
+      ipAddress,
+      userAgent,
+    })
 
     return NextResponse.json({
       clientSecret: paymentIntent.client_secret,
