@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import dbConnect from '@/lib/db'
 import Inventory from '@/models/Inventory'
 import { requireManagerOrAdmin } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -81,6 +82,7 @@ export async function PUT(req: NextRequest) {
 
     const currentQuantity = Number(current?.quantity || 0)
     const currentReserved = Number(current?.reserved || 0)
+    const currentAvailable = Math.max(0, currentQuantity - currentReserved)
 
     let nextQuantity = currentQuantity
     let nextReserved = currentReserved
@@ -112,6 +114,38 @@ export async function PUT(req: NextRequest) {
         runValidators: true,
       }
     ).populate('productId', 'nameFr nameEn sku reorderPoint safetyStock')
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+    const user = auth.session.user as any
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'INVENTORY_UPDATED',
+      entity: 'Inventory',
+      entityId: String((inventory as any)._id),
+      metadata: {
+        productId,
+        site,
+        action,
+        before: {
+          quantity: currentQuantity,
+          reserved: currentReserved,
+          available: currentAvailable,
+        },
+        after: {
+          quantity: nextQuantity,
+          reserved: nextReserved,
+          available: nextAvailable,
+        },
+        input: {
+          quantity,
+          reserved,
+        },
+      },
+      ipAddress,
+      userAgent,
+    })
 
     return NextResponse.json(inventory)
   } catch (error) {
