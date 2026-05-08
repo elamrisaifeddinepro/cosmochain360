@@ -6,6 +6,7 @@ import Product from '@/models/Product'
 import { calculateROP, calculateSafetyStock } from '@/lib/utils'
 import { getISOWeek, getYear, addWeeks } from 'date-fns'
 import { requireManagerOrAdmin } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -98,6 +99,9 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const previousReorderPoint = Number((product as any).reorderPoint || 0)
+    const previousSafetyStock = Number((product as any).safetyStock || 0)
+
     const twelveWeeksAgo = addWeeks(new Date(), -12)
 
     const orders = await Order.find({
@@ -122,8 +126,9 @@ export async function POST(req: NextRequest) {
     }
 
     let demandValues = Object.values(weeklyDemand)
+    const usedSimulatedData = demandValues.length === 0
 
-    if (demandValues.length === 0) {
+    if (usedSimulatedData) {
       demandValues = [3, 4, 5, 4, 6, 5, 4, 5]
     }
 
@@ -139,6 +144,10 @@ export async function POST(req: NextRequest) {
 
     const rop = calculateROP(forecastValue / 7, leadTimeDays, safetyStock)
 
+    const roundedSafetyStock = Math.round(safetyStock)
+    const roundedRop = Math.round(rop)
+    const roundedForecastValue = Math.max(0, Math.round(forecastValue))
+
     const forecasts = []
 
     for (let i = 1; i <= Number(weeksAhead); i++) {
@@ -152,7 +161,7 @@ export async function POST(req: NextRequest) {
         { productId, site, week: weekKey },
         {
           $set: {
-            forecastedDemand: Math.max(0, Math.round(forecastValue)),
+            forecastedDemand: roundedForecastValue,
             modelName: 'moving_average_12w',
             generatedAt: new Date(),
           },
@@ -165,23 +174,76 @@ export async function POST(req: NextRequest) {
 
     await Product.findByIdAndUpdate(productId, {
       $set: {
-        reorderPoint: Math.round(rop),
-        safetyStock: Math.round(safetyStock),
+        reorderPoint: roundedRop,
+        safetyStock: roundedSafetyStock,
       },
+    })
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+    const user = auth.session.user as any
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'FORECAST_GENERATED',
+      entity: 'Forecast',
+      entityId: productId,
+      metadata: {
+        productId,
+        site,
+        weeksAhead: Number(weeksAhead),
+        generatedForecastsCount: forecasts.length,
+        modelName: 'moving_average_12w',
+        avgWeeklyDemand: Math.round(forecastValue),
+        stdDevDemand,
+        historicalWeeks: Object.keys(weeklyDemand).length,
+        usedSimulatedData,
+      },
+      ipAddress,
+      userAgent,
+    })
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'REORDER_POINT_UPDATED',
+      entity: 'Product',
+      entityId: productId,
+      metadata: {
+        productId,
+        productName: (product as any).nameFr,
+        sku: (product as any).sku,
+        site,
+        before: {
+          reorderPoint: previousReorderPoint,
+          safetyStock: previousSafetyStock,
+        },
+        after: {
+          reorderPoint: roundedRop,
+          safetyStock: roundedSafetyStock,
+        },
+        inputs: {
+          leadTimeDays,
+          serviceLevelZ: 1.65,
+          avgWeeklyDemand: Math.round(forecastValue),
+          stdDevDemand,
+        },
+      },
+      ipAddress,
+      userAgent,
     })
 
     return NextResponse.json({
       forecasts,
       metrics: {
         avgWeeklyDemand: Math.round(forecastValue),
-        safetyStock: Math.round(safetyStock),
-        rop: Math.round(rop),
+        safetyStock: roundedSafetyStock,
+        rop: roundedRop,
         modelName: 'moving_average_12w',
         historicalWeeks: Object.keys(weeklyDemand).length,
-        note:
-          Object.keys(weeklyDemand).length === 0
-            ? 'Aucune vente historique trouvée : données simulées utilisées pour démonstration.'
-            : 'Prévision basée sur les ventes historiques.',
+        note: usedSimulatedData
+          ? 'Aucune vente historique trouvée : données simulées utilisées pour démonstration.'
+          : 'Prévision basée sur les ventes historiques.',
       },
     })
   } catch (error) {
