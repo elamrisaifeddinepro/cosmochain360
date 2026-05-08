@@ -3,6 +3,7 @@ import mongoose from 'mongoose'
 import dbConnect from '@/lib/db'
 import Order from '@/models/Order'
 import { requireAuth, requireManagerOrAdmin } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -90,6 +91,15 @@ export async function PUT(
       )
     }
 
+    const previousOrder = await Order.findById(params.id).lean()
+
+    if (!previousOrder) {
+      return NextResponse.json(
+        { error: 'Commande introuvable' },
+        { status: 404 }
+      )
+    }
+
     const body = await req.json()
     const { status, trackingNumber, carrier, notes } = body
 
@@ -123,6 +133,35 @@ export async function PUT(
         { status: 404 }
       )
     }
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+    const user = auth.session.user as any
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'ORDER_STATUS_UPDATED',
+      entity: 'Order',
+      entityId: params.id,
+      metadata: {
+        orderNumber: (order as any).orderNumber,
+        before: {
+          status: (previousOrder as any).status,
+          trackingNumber: (previousOrder as any).trackingNumber,
+          carrier: (previousOrder as any).carrier,
+          notes: (previousOrder as any).notes,
+        },
+        after: {
+          status: (order as any).status,
+          trackingNumber: (order as any).trackingNumber,
+          carrier: (order as any).carrier,
+          notes: (order as any).notes,
+        },
+        changedFields: Object.keys(update),
+      },
+      ipAddress,
+      userAgent,
+    })
 
     return NextResponse.json(order)
   } catch (error) {

@@ -4,6 +4,7 @@ import Order from '@/models/Order'
 import Inventory from '@/models/Inventory'
 import { generateOrderNumber, calculateTaxes } from '@/lib/utils'
 import { requireAuth } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -122,6 +123,29 @@ export async function POST(req: NextRequest) {
         { $inc: { reserved: Number(item.quantity) } }
       )
     }
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'ORDER_CREATED',
+      entity: 'Order',
+      entityId: order._id.toString(),
+      metadata: {
+        orderNumber: order.orderNumber,
+        total: order.total,
+        subtotal: order.subtotal,
+        gst: order.gst,
+        pst: order.pst,
+        shippingCost: order.shippingCost,
+        itemCount: items.length,
+        status: order.status,
+        paymentStatus: order.paymentStatus,
+      },
+      ipAddress,
+      userAgent,
+    })
 
     return NextResponse.json(order, { status: 201 })
   } catch (error) {
