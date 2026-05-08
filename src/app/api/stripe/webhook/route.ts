@@ -3,6 +3,7 @@ import Stripe from 'stripe'
 import dbConnect from '@/lib/db'
 import Order from '@/models/Order'
 import Inventory from '@/models/Inventory'
+import { logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -77,6 +78,9 @@ export async function POST(req: NextRequest) {
           break
         }
 
+        const previousPaymentStatus = order.paymentStatus
+        const previousOrderStatus = order.status
+
         order.paymentStatus = 'paid'
         order.status = 'confirmed'
         order.stripeChargeId = paymentIntent.latest_charge as string
@@ -102,21 +106,78 @@ export async function POST(req: NextRequest) {
           )
         }
 
+        await logAudit({
+          userId: order.userId ? String(order.userId) : null,
+          userEmail: null,
+          action: 'PAYMENT_SUCCEEDED',
+          entity: 'Order',
+          entityId: order._id.toString(),
+          metadata: {
+            orderNumber: order.orderNumber,
+            stripePaymentIntentId: paymentIntent.id,
+            stripeChargeId: paymentIntent.latest_charge,
+            amount: paymentIntent.amount,
+            currency: paymentIntent.currency,
+            previousPaymentStatus,
+            previousOrderStatus,
+            newPaymentStatus: order.paymentStatus,
+            newOrderStatus: order.status,
+            contractSentAt: order.contractSentAt,
+            inventoryDeducted: true,
+            itemsCount: order.items?.length || 0,
+          },
+          ipAddress: null,
+          userAgent: 'stripe-webhook',
+        })
+
         break
       }
 
       case 'payment_intent.payment_failed': {
         const paymentIntent = event.data.object as Stripe.PaymentIntent
 
-        await Order.findOneAndUpdate(
-          { stripePaymentIntentId: paymentIntent.id },
-          {
-            $set: {
-              paymentStatus: 'failed',
-              status: 'cancelled',
-            },
-          }
-        )
+        const order = await Order.findOne({
+          stripePaymentIntentId: paymentIntent.id,
+        })
+
+        if (!order) {
+          console.warn(
+            `Aucune commande trouvée pour PaymentIntent échoué ${paymentIntent.id}`
+          )
+          break
+        }
+
+        const previousPaymentStatus = order.paymentStatus
+        const previousOrderStatus = order.status
+
+        order.paymentStatus = 'failed'
+        order.status = 'cancelled'
+
+        await order.save()
+
+        await logAudit({
+          userId: order.userId ? String(order.userId) : null,
+          userEmail: null,
+          action: 'PAYMENT_FAILED',
+          entity: 'Order',
+          entityId: order._id.toString(),
+          metadata: {
+            orderNumber: order.orderNumber,
+            stripePaymentIntentId: paymentIntent.id,
+            amount: paymentIntent.amount,
+            currency: paymentIntent.currency,
+            previousPaymentStatus,
+            previousOrderStatus,
+            newPaymentStatus: order.paymentStatus,
+            newOrderStatus: order.status,
+            failureMessage:
+              paymentIntent.last_payment_error?.message || null,
+            failureCode:
+              paymentIntent.last_payment_error?.code || null,
+          },
+          ipAddress: null,
+          userAgent: 'stripe-webhook',
+        })
 
         break
       }
@@ -124,15 +185,43 @@ export async function POST(req: NextRequest) {
       case 'charge.refunded': {
         const charge = event.data.object as Stripe.Charge
 
-        await Order.findOneAndUpdate(
-          { stripeChargeId: charge.id },
-          {
-            $set: {
-              paymentStatus: 'refunded',
-              status: 'refunded',
-            },
-          }
-        )
+        const order = await Order.findOne({
+          stripeChargeId: charge.id,
+        })
+
+        if (!order) {
+          console.warn(`Aucune commande trouvée pour Charge ${charge.id}`)
+          break
+        }
+
+        const previousPaymentStatus = order.paymentStatus
+        const previousOrderStatus = order.status
+
+        order.paymentStatus = 'refunded'
+        order.status = 'refunded'
+
+        await order.save()
+
+        await logAudit({
+          userId: order.userId ? String(order.userId) : null,
+          userEmail: null,
+          action: 'PAYMENT_REFUNDED',
+          entity: 'Order',
+          entityId: order._id.toString(),
+          metadata: {
+            orderNumber: order.orderNumber,
+            stripeChargeId: charge.id,
+            amountRefunded: charge.amount_refunded,
+            amountCaptured: charge.amount_captured,
+            currency: charge.currency,
+            previousPaymentStatus,
+            previousOrderStatus,
+            newPaymentStatus: order.paymentStatus,
+            newOrderStatus: order.status,
+          },
+          ipAddress: null,
+          userAgent: 'stripe-webhook',
+        })
 
         break
       }
