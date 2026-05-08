@@ -3,6 +3,7 @@ import dbConnect from '@/lib/db'
 import Supplier from '@/models/Supplier'
 import { supplierRiskScore } from '@/lib/utils'
 import { requireManagerOrAdmin } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -65,6 +66,30 @@ export async function POST(req: NextRequest) {
       riskGrade: grade,
       isActive: body.isActive ?? true,
       lastReviewDate: body.lastReviewDate || new Date(),
+    })
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+    const user = auth.session.user as any
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'SUPPLIER_CREATED',
+      entity: 'Supplier',
+      entityId: supplier._id.toString(),
+      metadata: {
+        name: supplier.name,
+        sapVendorCode: supplier.sapVendorCode,
+        otd: supplier.otd,
+        qualityScore: supplier.qualityScore,
+        incidents: supplier.incidents,
+        priceVariance: supplier.priceVariance,
+        riskScore: supplier.riskScore,
+        riskGrade: supplier.riskGrade,
+        isActive: supplier.isActive,
+      },
+      ipAddress,
+      userAgent,
     })
 
     return NextResponse.json(supplier, { status: 201 })
