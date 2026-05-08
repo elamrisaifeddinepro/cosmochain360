@@ -3,6 +3,7 @@ import dbConnect from '@/lib/db'
 import Product from '@/models/Product'
 import { slugify } from '@/lib/utils'
 import { requireManagerOrAdmin } from '@/lib/auth-guards'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
@@ -89,6 +90,26 @@ export async function POST(req: NextRequest) {
     const product = await Product.create({
       ...body,
       slug: body.slug || slugify(body.nameFr),
+    })
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+    const user = auth.session.user as any
+
+    await logAudit({
+      userId: user.id,
+      userEmail: user.email,
+      action: 'PRODUCT_CREATED',
+      entity: 'Product',
+      entityId: product._id.toString(),
+      metadata: {
+        nameFr: product.nameFr,
+        nameEn: product.nameEn,
+        sku: product.sku,
+        category: product.category,
+        price: product.price,
+      },
+      ipAddress,
+      userAgent,
     })
 
     return NextResponse.json(product, { status: 201 })
