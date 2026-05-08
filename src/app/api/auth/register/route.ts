@@ -2,12 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import dbConnect from '@/lib/db'
 import User from '@/models/User'
 import { z } from 'zod'
+import { getRequestInfo, logAudit } from '@/lib/audit'
 
 export const dynamic = 'force-dynamic'
 
 const registerSchema = z.object({
   email: z.string().email().trim().toLowerCase(),
-  password: z.string().min(8, 'Le mot de passe doit contenir au moins 8 caractères'),
+  password: z
+    .string()
+    .min(8, 'Le mot de passe doit contenir au moins 8 caractères'),
   firstName: z.string().min(1, 'Le prénom est obligatoire').trim(),
   lastName: z.string().min(1, 'Le nom est obligatoire').trim(),
   marketingConsent: z.boolean().default(false),
@@ -58,6 +61,27 @@ export async function POST(req: NextRequest) {
       analyticsConsent,
       consentDate: hasConsent ? new Date() : undefined,
       role: 'client',
+    })
+
+    const { ipAddress, userAgent } = getRequestInfo(req)
+
+    await logAudit({
+      userId: String(user._id),
+      userEmail: user.email,
+      action: 'USER_REGISTERED',
+      entity: 'User',
+      entityId: String(user._id),
+      metadata: {
+        email: user.email,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        role: user.role,
+        marketingConsent: user.marketingConsent,
+        analyticsConsent: user.analyticsConsent,
+        consentDate: user.consentDate,
+      },
+      ipAddress,
+      userAgent,
     })
 
     return NextResponse.json(
